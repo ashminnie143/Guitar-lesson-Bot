@@ -4,9 +4,9 @@ const app = express();
 app.use(express.json());
 
 // ============================================
-// YOUR KEYS - Fill these in
+// YOUR KEYS - Set as environment variables
 // ============================================
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
@@ -83,32 +83,37 @@ app.post("/webhook", async (req, res) => {
 
     // Build conversation history
     if (!conversations[from]) conversations[from] = [];
-    conversations[from].push({ role: "user", content: userText });
+    conversations[from].push({ role: "user", parts: [{ text: userText }] });
 
     // Keep only last 20 messages to save memory
     if (conversations[from].length > 20) {
       conversations[from] = conversations[from].slice(-20);
     }
 
-    // Ask Claude for a reply
-    const claudeResponse = await axios.post(
-      "https://api.anthropic.com/v1/messages",
+    // Ask Gemini for a reply
+    const geminiResponse = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
       {
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 1000,
-        system: SYSTEM_PROMPT,
-        messages: conversations[from],
+        system_instruction: {
+          parts: [{ text: SYSTEM_PROMPT }]
+        },
+        contents: conversations[from],
+        generationConfig: {
+          maxOutputTokens: 500,
+          temperature: 0.7,
+        }
       },
       {
         headers: {
-          "x-api-key": ANTHROPIC_API_KEY,
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
+          "Content-Type": "application/json",
         },
       }
     );
 
-    let reply = claudeResponse.data.content[0].text;
+    let reply = geminiResponse.data.candidates[0].content.parts[0].text;
+
+    // Save bot reply to memory
+    conversations[from].push({ role: "model", parts: [{ text: reply }] });
 
     // Check if it's time to hand off to Ash
     let handoff = false;
@@ -116,9 +121,6 @@ app.post("/webhook", async (req, res) => {
       reply = reply.replace("HANDOFF_TO_ASH", "").trim();
       handoff = true;
     }
-
-    // Save bot reply to memory
-    conversations[from].push({ role: "assistant", content: reply });
 
     // Send reply to student
     await sendMessage(from, reply);
